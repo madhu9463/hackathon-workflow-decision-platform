@@ -1,0 +1,70 @@
+{
+  "id": "vendor_approval",
+  "name": "Vendor onboarding approval",
+  "schema": {
+    "fields": {
+      "vendor_id":         {"type": "string", "min_length": 3, "max_length": 40},
+      "vendor_name":       {"type": "string", "min_length": 2},
+      "country":           {"type": "string", "pattern": "^[A-Z]{2}$"},
+      "category":          {"type": "string", "enum": ["software", "logistics", "raw_materials", "consulting"]},
+      "years_in_business": {"type": "integer", "min": 0},
+      "annual_revenue":    {"type": "number", "min": 0},
+      "contract_value":    {"type": "number", "min": 0}
+    }
+  },
+  "start": "basic_checks",
+  "stages": {
+    "basic_checks": {
+      "type": "rules",
+      "rules": [
+        {"id": "V1_ESTABLISHED", "description": "Vendor must have at least 1 year in business",
+         "check": {"field": "input.years_in_business", "op": "gte", "value": 1},
+         "on_fail": "reject"},
+        {"id": "V2_HAS_REVENUE", "description": "Vendor must report positive annual revenue",
+         "check": {"field": "input.annual_revenue", "op": "gt", "value": 0},
+         "on_fail": "reject"}
+      ],
+      "next": "sanctions_check"
+    },
+    "sanctions_check": {
+      "type": "dependency",
+      "service": "sanctions",
+      "params": {"vendor_id": "input.vendor_id", "vendor_name": "input.vendor_name"},
+      "store_as": "sanctions",
+      "retries": {"max_attempts": 3, "max_total_attempts": 6,
+                  "backoff_base_seconds": 0.2, "backoff_factor": 2},
+      "on_exhausted": "manual_review",
+      "next": "compliance_rules"
+    },
+    "compliance_rules": {
+      "type": "rules",
+      "rules": [
+        {"id": "V3_NOT_SANCTIONED", "description": "Vendor must not appear on a sanctions list",
+         "check": {"field": "deps.sanctions.listed", "op": "eq", "value": false},
+         "on_fail": "reject"},
+        {"id": "V4_REVENUE_COVERS_CONTRACT",
+         "description": "Contract value must not exceed half of annual revenue",
+         "check": {"field": "input.contract_value", "op": "lte",
+                   "value": {"field": "input.annual_revenue", "mul": 0.5}},
+         "on_fail": "manual_review"},
+        {"id": "V5_NEW_VENDOR_WATCH",
+         "description": "Vendors under 3 years old are flagged for monitoring",
+         "check": {"field": "input.years_in_business", "op": "gte", "value": 3},
+         "on_fail": "flag"}
+      ],
+      "next": "value_branch"
+    },
+    "value_branch": {
+      "type": "branch",
+      "branches": [
+        {"description": "High-value contracts need director approval",
+         "when": {"field": "input.contract_value", "op": "gt", "value": 1000000},
+         "next": "director_review"}
+      ],
+      "default": "approve"
+    },
+    "director_review": {"type": "terminal", "decision": "MANUAL_REVIEW",
+                        "reason": "Contract above 1000000 requires director approval"},
+    "approve": {"type": "terminal", "decision": "APPROVED", "reason": "Vendor cleared"}
+  }
+}

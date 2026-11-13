@@ -1,0 +1,67 @@
+{
+  "id": "loan_approval",
+  "name": "Loan approval",
+  "schema": {
+    "fields": {
+      "applicant_id": {"type": "string", "min_length": 3, "max_length": 40},
+      "age":          {"type": "integer", "min": 0, "max": 120},
+      "income":       {"type": "number", "min": 0},
+      "loan_amount":  {"type": "number", "min": 1},
+      "employment":   {"type": "string", "enum": ["salaried", "self_employed", "unemployed"]}
+    }
+  },
+  "start": "mandatory_checks",
+  "stages": {
+    "mandatory_checks": {
+      "type": "rules",
+      "rules": [
+        {"id": "R1_ADULT", "description": "Applicant must be 18 or older",
+         "check": {"field": "input.age", "op": "gte", "value": 18}, "on_fail": "reject"},
+        {"id": "R2_EMPLOYED", "description": "Applicant must have a source of income",
+         "check": {"field": "input.employment", "op": "ne", "value": "unemployed"},
+         "on_fail": "reject"}
+      ],
+      "next": "credit_check"
+    },
+    "credit_check": {
+      "type": "dependency",
+      "service": "credit_bureau",
+      "params": {"applicant_id": "input.applicant_id"},
+      "store_as": "credit",
+      "retries": {"max_attempts": 3, "max_total_attempts": 6,
+                  "backoff_base_seconds": 0.2, "backoff_factor": 2},
+      "on_exhausted": "manual_review",
+      "next": "risk_rules"
+    },
+    "risk_rules": {
+      "type": "rules",
+      "rules": [
+        {"id": "R3_MIN_SCORE", "description": "Credit score must be at least 550",
+         "check": {"field": "deps.credit.score", "op": "gte", "value": 550},
+         "on_fail": "reject"},
+        {"id": "R4_AFFORDABILITY", "description": "Loan must not exceed 5x annual income",
+         "check": {"field": "input.loan_amount", "op": "lte",
+                   "value": {"field": "input.income", "mul": 5}},
+         "on_fail": "reject"},
+        {"id": "R5_SELF_EMPLOYED_SCORE",
+         "description": "Self-employed applicants need a credit score of at least 620",
+         "when": {"field": "input.employment", "op": "eq", "value": "self_employed"},
+         "check": {"field": "deps.credit.score", "op": "gte", "value": 620},
+         "on_fail": "manual_review"}
+      ],
+      "next": "amount_branch"
+    },
+    "amount_branch": {
+      "type": "branch",
+      "branches": [
+        {"description": "Large loans need senior sign-off",
+         "when": {"field": "input.loan_amount", "op": "gt", "value": 400000},
+         "next": "senior_review"}
+      ],
+      "default": "approve"
+    },
+    "senior_review": {"type": "terminal", "decision": "MANUAL_REVIEW",
+                      "reason": "Loan above 400000 requires senior underwriter review"},
+    "approve": {"type": "terminal", "decision": "APPROVED", "reason": "All checks passed"}
+  }
+}
