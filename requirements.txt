@@ -1,2 +1,0 @@
-# No third-party packages are required: the platform uses only the Python 3 standard library.
-# Python 3.8 or newer is needed.
